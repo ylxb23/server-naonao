@@ -17,6 +17,7 @@ import (
 var (
 	// 存储文件路径
 	userHome, _ = os.UserHomeDir()
+	dataPath    = userHome + "/data/naonao/data/"
 	uploadPath  = userHome + "/data/naonao/images/"
 	requestPath = "http://127.0.0.1:8080/image/"
 	// 微信配置信息
@@ -40,9 +41,51 @@ func main() {
 	// 接收上传的文件
 	r.POST("/upload", uploadAndSaveFile)
 	r.GET("/image/:filename", getFile)
+	// 保存卡片信息
+	r.POST("/card", saveCardInfo)
+	r.GET("/cards/:openid", getCardListInfo)
 	// request for: /wx/user?js_code=xxxxxx
 	r.GET("/wx/user", getWxUserInfoByJsCode)
 	r.Run(":8080") // 监听端口"
+}
+
+func getCardListInfo(c *gin.Context) {
+	openid := c.Param("openid")
+	if openid == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Openid is required"})
+		return
+	}
+	dataUri := dataPath + openid + ".json"
+	if _, err := os.Stat(dataUri); os.IsNotExist(err) {
+		// 为空
+		fmt.Printf("用户卡片数据为空, openid[%s], err: %v\n", openid, err)
+		c.JSON(http.StatusOK, gin.H{"cards": []string{}})
+		return
+	}
+	file, err := os.Open(dataUri)
+	if err != nil {
+		fmt.Printf("卡片列表数据文件打开异常, openid[%s], err: %v\n", openid, err)
+		c.JSON(http.StatusOK, gin.H{"cards": []string{}})
+		return
+	}
+	defer file.Close()
+	var cards []CardItem
+	if err := json.NewDecoder(file).Decode(&cards); err != nil {
+		fmt.Printf("反序列化卡片列表异常, openid[%s], err: %v\n", openid, err)
+		c.JSON(http.StatusOK, gin.H{"cards": []string{}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"cards": cards})
+}
+
+func saveCardInfo(c *gin.Context) {
+	// 请求参数是json格式的 CardItemRequest
+	var cardItem CardItem
+	if err := c.ShouldBindJSON(&cardItem); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 }
 
 /**
@@ -79,7 +122,23 @@ func getWxUserInfoByJsCode(c *gin.Context) {
 	}
 }
 
+type CardItemRequest struct {
+	CardItem  CardItem `json:"card"`
+	Openid    string   `json:"openid"`
+	Operation string   `json:"operation"` // 添加、删除、更新
+}
+
+type CardItem struct {
+	Sort       int    `json:"sort"`
+	Type       string `json:"type"`
+	Title      string `json:"title"`
+	Date       string `json:"date"`
+	Background string `json:"background"`
+}
+
 type WxUser struct {
+	Errcode    int    `json:"errcode"`
+	Errmsg     string `json:"errmsg"`
 	SessionKey string `json:"session_key"`
 	OpenId     string `json:"openid"`
 }
