@@ -10,15 +10,19 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/gin-gonic/gin"
 )
 
 var (
+	// 启动端口
+	port = ":8080"
 	// 存储文件路径
 	userHome, _ = os.UserHomeDir()
-	dataPath    = userHome + "/data/naonao/data/"
-	uploadPath  = userHome + "/data/naonao/images/"
+	basePath    = userHome + "/data/naonao/"
+	dataPath    = basePath + "data/"
+	imgsPath    = basePath + "images/"
 	requestPath = "http://127.0.0.1:8080/image/"
 	// 微信配置信息
 	wxAppId     = "wx3302905cf62be66c"
@@ -28,15 +32,19 @@ var (
 
 func main() {
 	// 创建 gin 服务
+	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 	r.GET("/", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"message": "Hello NaoNao",
 		})
 	})
-	// 判断 uploadPath目录是否存在，不存在则创建该文件夹
-	if _, err := os.Stat(uploadPath); os.IsNotExist(err) {
-		os.MkdirAll(uploadPath, os.ModePerm)
+	// 判断 dataPath,imgsPath 目录是否存在，不存在则创建该文件夹
+	if _, err := os.Stat(dataPath); os.IsNotExist(err) {
+		os.MkdirAll(dataPath, os.ModePerm)
+	}
+	if _, err := os.Stat(imgsPath); os.IsNotExist(err) {
+		os.MkdirAll(imgsPath, os.ModePerm)
 	}
 	// 接收上传的文件
 	r.POST("/upload", uploadAndSaveFile)
@@ -46,19 +54,28 @@ func main() {
 	r.GET("/cards/:openid", getCardListInfo)
 	// request for: /wx/user?js_code=xxxxxx
 	r.GET("/wx/user", getWxUserInfoByJsCode)
-	r.Run(":8080") // 监听端口"
+	fmt.Println("http://127.0.0.1:8080")
+	r.Run(port) // 监听端口"
+	fmt.Println("服务启动成功, 端口: ", port)
 }
 
+func dataLocalUri(openid string) string {
+	return dataPath + openid + ".json"
+}
+
+/**
+ * 根据用户openid获取用户的卡片列表
+ */
 func getCardListInfo(c *gin.Context) {
 	openid := c.Param("openid")
 	if openid == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Openid is required"})
 		return
 	}
-	dataUri := dataPath + openid + ".json"
+	dataUri := dataLocalUri(openid)
 	if _, err := os.Stat(dataUri); os.IsNotExist(err) {
 		// 为空
-		fmt.Printf("用户卡片数据为空, openid[%s], err: %v\n", openid, err)
+		fmt.Printf("用户卡片数据为空, openid[%s], info: %v\n", openid, err)
 		c.JSON(http.StatusOK, gin.H{"cards": []string{}})
 		return
 	}
@@ -75,17 +92,74 @@ func getCardListInfo(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"cards": []string{}})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"cards": cards})
+	c.JSON(http.StatusOK, gin.H{"cards": cards, "size": len(cards)})
 }
 
 func saveCardInfo(c *gin.Context) {
 	// 请求参数是json格式的 CardItemRequest
-	var cardItem CardItem
-	if err := c.ShouldBindJSON(&cardItem); err != nil {
+	var cardItemRequest CardItemRequest
+	if err := c.ShouldBindJSON(&cardItemRequest); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	// 检查卡片信息是否合法
+	if cardItemRequest.Openid == "" || cardItemRequest.Card.Title == "" || cardItemRequest.Card.Date == "" || cardItemRequest.Card.Background == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Openid, Title, Date, Background is required"})
+		return
+	}
 
+	var cards []CardItem
+	// 读取所有这个opendid
+	dataUri := dataLocalUri(cardItemRequest.Openid)
+	_, err := os.Stat(dataUri)
+	if err != nil {
+		fmt.Printf("用户卡片列表还是空的, openid[%s], info: %v\n", cardItemRequest.Openid, err)
+	} else {
+		file, err := os.Open(dataUri)
+		if err != nil {
+			fmt.Printf("卡片列表数据文件打开异常, openid[%s], err: %v\n", cardItemRequest.Openid, err)
+			c.JSON(http.StatusOK, gin.H{"cards": []string{}})
+			return
+		}
+		defer file.Close()
+		if err := json.NewDecoder(file).Decode(&cards); err != nil {
+			fmt.Printf("反序列化卡片列表异常, openid[%s], err: %v\n", cardItemRequest.Openid, err)
+			c.JSON(http.StatusOK, gin.H{"cards": []string{}})
+			return
+		}
+		fmt.Printf("读取卡片列表数据成功, openid[%s], cards: %v\n", cardItemRequest.Openid, cards)
+		// 根据 sort属性排序cards
+		sort.Slice(cards, func(i, j int) bool {
+			return cards[i].Sort < cards[j].Sort
+		})
+	}
+	// 判断同类型的卡片，Title 是否存在，如果存在则直接返回成功
+	for _, card := range cards {
+		if card.Title == cardItemRequest.Card.Title {
+			c.JSON(http.StatusOK, gin.H{"message": "卡片已存在", "cards": cards, "total": len(cards)})
+			return
+		}
+	}
+	if cardItemRequest.Card.Sort == 0 {
+		if len(cards) > 0 {
+			cardItemRequest.Card.Sort = cards[len(cards)-1].Sort + 1
+		} else {
+			cardItemRequest.Card.Sort = 1
+		}
+	}
+
+	cards = append(cards, cardItemRequest.Card)
+	fmt.Printf("添加卡片数据成功, openid[%s], cards: %v\n", cardItemRequest.Openid, cards)
+	data, err := json.Marshal(cards)
+	if err != nil {
+		fmt.Printf("序列化卡片列表异常, openid[%s], err: %v\n", cardItemRequest.Openid, err)
+		c.JSON(http.StatusOK, gin.H{"cards": []string{}})
+		return
+	}
+	fmt.Printf("写入卡片列表数据成功, openid[%s], cards: %v\n", cardItemRequest.Openid, cards)
+	os.WriteFile(dataUri, data, 0644)
+	c.JSON(http.StatusOK, gin.H{"message": "卡片数据保存成功", "cards": cards, "total": len(cards)})
+	return
 }
 
 /**
@@ -123,14 +197,14 @@ func getWxUserInfoByJsCode(c *gin.Context) {
 }
 
 type CardItemRequest struct {
-	CardItem  CardItem `json:"card"`
+	Card      CardItem `json:"card"`
 	Openid    string   `json:"openid"`
 	Operation string   `json:"operation"` // 添加、删除、更新
 }
 
 type CardItem struct {
 	Sort       int    `json:"sort"`
-	Type       string `json:"type"`
+	Type       int    `json:"type"`
 	Title      string `json:"title"`
 	Date       string `json:"date"`
 	Background string `json:"background"`
@@ -145,7 +219,7 @@ type WxUser struct {
 
 func getFile(c *gin.Context) {
 	filename := c.Param("filename")
-	path := uploadPath + filename
+	path := imgsPath + filename
 	// 判断文件路径是否存在
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
@@ -197,7 +271,7 @@ func uploadAndSaveFile(c *gin.Context) {
 	md5Hash := hex.EncodeToString(hasher.Sum(nil))
 
 	// 构建保存的文件路径
-	savePath := uploadPath + md5Hash + fileSuffix
+	savePath := imgsPath + md5Hash + fileSuffix
 	fmt.Printf("上传的文件: %s, 保存到: %s \n", filename, savePath)
 	// 保存文件到指定路径
 	out, err := os.Create(savePath)
