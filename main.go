@@ -103,8 +103,8 @@ func saveCardInfo(c *gin.Context) {
 		return
 	}
 	// 检查卡片信息是否合法
-	if cardItemRequest.Openid == "" || cardItemRequest.Card.Title == "" || cardItemRequest.Card.Date == "" || cardItemRequest.Card.Background == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Openid, Title, Date, Background is required"})
+	if ok, msg := cardContentCheck(cardItemRequest); !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 		return
 	}
 
@@ -113,7 +113,7 @@ func saveCardInfo(c *gin.Context) {
 	dataUri := dataLocalUri(cardItemRequest.Openid)
 	_, err := os.Stat(dataUri)
 	if err != nil {
-		fmt.Printf("用户卡片列表还是空的, openid[%s], info: %v\n", cardItemRequest.Openid, err)
+		fmt.Printf("用户卡片列表还是空的,将新建初始化, openid[%s], info: %v\n", cardItemRequest.Openid, err)
 	} else {
 		file, err := os.Open(dataUri)
 		if err != nil {
@@ -133,33 +133,55 @@ func saveCardInfo(c *gin.Context) {
 			return cards[i].Sort < cards[j].Sort
 		})
 	}
-	// 判断同类型的卡片，Title 是否存在，如果存在则直接返回成功
-	for _, card := range cards {
-		if card.Title == cardItemRequest.Card.Title {
-			c.JSON(http.StatusOK, gin.H{"message": "卡片已存在", "cards": cards, "total": len(cards)})
-			return
+
+	if cardItemRequest.Operation == "add" {
+		// 判断同类型的卡片，Title 是否存在，如果存在则直接返回成功
+		for _, card := range cards {
+			if card.Title == cardItemRequest.Card.Title {
+				c.JSON(http.StatusOK, gin.H{"message": "卡片已存在", "cards": cards, "total": len(cards)})
+				return
+			}
 		}
-	}
-	if cardItemRequest.Card.Sort == 0 {
-		if len(cards) > 0 {
-			cardItemRequest.Card.Sort = cards[len(cards)-1].Sort + 1
-		} else {
-			cardItemRequest.Card.Sort = 1
+		if cardItemRequest.Card.Sort == 0 {
+			if len(cards) > 0 {
+				cardItemRequest.Card.Sort = cards[len(cards)-1].Sort + 1
+			} else {
+				cardItemRequest.Card.Sort = 1
+			}
+		}
+		cards = append(cards, cardItemRequest.Card)
+		fmt.Printf("添加卡片数据成功, openid[%s], cards: %v\n", cardItemRequest.Openid, cards)
+	} else if cardItemRequest.Operation == "delete" {
+		// 删除卡片
+		for i, card := range cards {
+			if card.Title == cardItemRequest.Card.Title {
+				// 删除卡片
+				cards = append(cards[:i], cards[i+1:]...)
+				fmt.Printf("删除卡片数据成功, openid[%s], cards: %v\n", cardItemRequest.Openid, cards)
+				break
+			}
+		}
+	} else if cardItemRequest.Operation == "update" {
+		// 更新卡片
+		for i, card := range cards {
+			if card.Title == cardItemRequest.Card.Title {
+				// 替换卡片
+				cards[i] = cardItemRequest.Card
+				fmt.Printf("更新卡片数据成功, openid[%s], cards: %v\n", cardItemRequest.Openid, cards)
+				break
+			}
 		}
 	}
 
-	cards = append(cards, cardItemRequest.Card)
-	fmt.Printf("添加卡片数据成功, openid[%s], cards: %v\n", cardItemRequest.Openid, cards)
 	data, err := json.Marshal(cards)
 	if err != nil {
 		fmt.Printf("序列化卡片列表异常, openid[%s], err: %v\n", cardItemRequest.Openid, err)
 		c.JSON(http.StatusOK, gin.H{"cards": []string{}})
 		return
 	}
-	fmt.Printf("写入卡片列表数据成功, openid[%s], cards: %v\n", cardItemRequest.Openid, cards)
 	os.WriteFile(dataUri, data, 0644)
+	fmt.Printf("写入卡片列表数据成功, openid[%s], cards: %v\n", cardItemRequest.Openid, cards)
 	c.JSON(http.StatusOK, gin.H{"message": "卡片数据保存成功", "cards": cards, "total": len(cards)})
-	return
 }
 
 /**
@@ -203,11 +225,18 @@ type CardItemRequest struct {
 }
 
 type CardItem struct {
-	Sort       int    `json:"sort"`
-	Type       int    `json:"type"`
-	Title      string `json:"title"`
-	Date       string `json:"date"`
-	Background string `json:"background"`
+	Sort       int             `json:"sort"`
+	Type       int             `json:"type"` // 0-Empty, 2-Anniversary, 3-Countdown, 4-CountdownList, 5-Progress, 6-ToDoList
+	Title      string          `json:"title"`
+	Date       string          `json:"date"`
+	Background string          `json:"background"`
+	List       []NamedDateItem `json:"list"`
+}
+
+type NamedDateItem struct {
+	Name   string `json:"name"`
+	Date   string `json:"date"`
+	Avatar string `json:"avatar"`
 }
 
 type WxUser struct {
