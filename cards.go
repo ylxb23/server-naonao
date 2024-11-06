@@ -22,6 +22,10 @@ func cardContentCheck(card CardItemRequest) (ok bool, message string) {
 	if card.Card.Title == "" {
 		return false, "卡片标题为空"
 	}
+	// 如果是删除卡片，则无需其他检查
+	if card.Operation == "delete" {
+		return true, ""
+	}
 	// 卡片类型内容检查
 	switch card.Card.Type {
 	case CardTypeEmpty:

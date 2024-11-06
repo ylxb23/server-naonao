@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,7 +24,7 @@ var (
 	basePath    = userHome + "/data/naonao/"
 	dataPath    = basePath + "data/"
 	imgsPath    = basePath + "images/"
-	requestPath = "http://127.0.0.1:8080/image/"
+	requestPath = fmt.Sprintf("http://%s%s/image/", localIp(), port)
 	// 微信配置信息
 	wxAppId     = "wx3302905cf62be66c"
 	wxAppSecret = "d901d71313cc231311a0b5794bc483a9"
@@ -54,13 +55,31 @@ func main() {
 	r.GET("/cards/:openid", getCardListInfo)
 	// request for: /wx/user?js_code=xxxxxx
 	r.GET("/wx/user", getWxUserInfoByJsCode)
-	fmt.Println("http://127.0.0.1:8080")
+	fmt.Println("http://192.168.43.167:8080")
 	r.Run(port) // 监听端口"
 	fmt.Println("服务启动成功, 端口: ", port)
 }
 
+// 获取当前本地ip
+func localIp() string {
+	addrs, err := net.InterfaceAddrs()
+	if err == nil {
+		// for dev
+		return "192.168.43.167"
+	}
+	for _, address := range addrs {
+		// 检查ip地址判断是否回环地址
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return "192.168.43.167"
+}
+
 func dataLocalUri(openid string) string {
-	return dataPath + openid + ".json"
+	return fmt.Sprintf("%s%s.json", dataPath, openid)
 }
 
 /**
